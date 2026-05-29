@@ -23,12 +23,28 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+DOOR_WINDOW_CLASSES = {"door", "window", "opening", "garage_door"}
+
+
 def _get_binary_sensors(hass):
     result = {}
+    fallback = {}
+
     for state in hass.states.async_all("binary_sensor"):
         eid = state.entity_id
         name = state.attributes.get("friendly_name", eid)
-        result[eid] = f"{name} ({eid})"
+        device_class = state.attributes.get("device_class", "")
+
+        label = f"{name} ({eid})"
+        fallback[eid] = label
+
+        if device_class in DOOR_WINDOW_CLASSES:
+            result[eid] = label
+
+    # Daca nu gasim niciun senzor de usa/geam, aratam toti senzorii
+    if not result:
+        return dict(sorted(fallback.items(), key=lambda x: x[1]))
+
     return dict(sorted(result.items(), key=lambda x: x[1]))
 
 
