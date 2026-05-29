@@ -1,0 +1,9 @@
+{
+  "name": "Impulse Counter (Water & Gas)",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["sensor"],
+  "country": ["RO", "EU"],
+  "homeassistant": "2023.1.0",
+  "filename": "impulse-counter-card.js"
+}

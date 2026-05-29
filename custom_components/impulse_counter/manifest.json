@@ -1,0 +1,12 @@
+{
+  "domain": "impulse_counter",
+  "name": "Impulse Counter (Water & Gas)",
+  "version": "1.0.0",
+  "documentation": "https://github.com/yourusername/ha-impulse-counter",
+  "issue_tracker": "https://github.com/yourusername/ha-impulse-counter/issues",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": [],
+  "iot_class": "local_push",
+  "config_flow": true
+}

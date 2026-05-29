@@ -1,0 +1,76 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Impulse Counter Setup",
+        "description": "Configure a water or gas meter using a magnetic contact sensor.",
+        "data": {
+          "meter_name": "Meter name",
+          "source_entity": "Contact sensor (door / window)",
+          "meter_type": "Meter type",
+          "multiplier": "Multiplier factor (pulses / m³)",
+          "initial_value": "Initial index (m³)"
+        },
+        "data_description": {
+          "meter_name": "E.g. Cold Water Meter, Kitchen Gas Meter",
+          "source_entity": "Magnetic sensor connected to the physical meter",
+          "multiplier": "How many pulses = 1 m³ (printed on the meter)",
+          "initial_value": "Current reading on physical meter (0 if new)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This meter is already configured.",
+      "no_binary_sensors": "No binary sensors found in Home Assistant."
+    },
+    "error": {
+      "name_required": "Meter name is required.",
+      "entity_required": "Please select a sensor.",
+      "invalid_multiplier": "Multiplier must be greater than 0."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage meter: {meter_name}",
+        "description": "What would you like to do?",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "edit_config": {
+        "title": "Edit configuration — {meter_name}",
+        "description": "Change the contact sensor or calculation parameters.\n\nCurrent sensor: `{current_entity}`",
+        "data": {
+          "source_entity": "Contact sensor (door / window)",
+          "meter_type": "Meter type",
+          "multiplier": "Multiplier factor (pulses / m³)"
+        },
+        "data_description": {
+          "source_entity": "Select the new magnetic sensor (e.g. if replaced)",
+          "multiplier": "How many pulses = 1 m³ (printed on meter)"
+        }
+      },
+      "adjust_index": {
+        "title": "Adjust index — {meter_name}",
+        "description": "Use this if the sensor was disconnected and the counter drifted from the physical meter.\n\n**Current HA reading:** {current_reading} m³\n\nEnter the actual value from the physical meter. Recorded pulses are **preserved**, only the offset changes.",
+        "data": {
+          "new_index": "Actual meter reading (m³)"
+        }
+      },
+      "reset_counter": {
+        "title": "Full reset — {meter_name}",
+        "description": "⚠️ Use this option **only when replacing the physical meter**.\n\nAll recorded pulses will be **deleted**. Enter the starting index of the new meter (usually 0).\n\nCurrent sensor: `{current_entity}`",
+        "data": {
+          "new_initial_value": "New meter starting index (m³)",
+          "confirm_reset": "I confirm I want to fully reset the counter"
+        }
+      }
+    },
+    "error": {
+      "invalid_multiplier": "Multiplier must be greater than 0.",
+      "invalid_value": "The entered value is not valid.",
+      "must_confirm": "You must check the confirmation box to reset the counter."
+    }
+  }
+}

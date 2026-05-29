@@ -1,0 +1,76 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurare Contor de Impulsuri",
+        "description": "Configurați un contor de apă sau gaz cu senzor de contact magnetic.",
+        "data": {
+          "meter_name": "Numele contorului",
+          "source_entity": "Senzor de contact (ușă / geam)",
+          "meter_type": "Tipul contorului",
+          "multiplier": "Factor de multiplicare (impulsuri / m³)",
+          "initial_value": "Index inițial (m³)"
+        },
+        "data_description": {
+          "meter_name": "Ex: Contor Apă Rece, Contor Gaz Bucătărie",
+          "source_entity": "Senzorul magnetic conectat la contorul fizic",
+          "multiplier": "Câte impulsuri = 1 m³ (scris pe contorul fizic)",
+          "initial_value": "Valoarea actuală de pe contorul fizic (0 dacă e nou)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Acest contor este deja configurat.",
+      "no_binary_sensors": "Nu au fost găsiți senzori binari în Home Assistant."
+    },
+    "error": {
+      "name_required": "Numele contorului este obligatoriu.",
+      "entity_required": "Trebuie să selectați un senzor.",
+      "invalid_multiplier": "Factorul de multiplicare trebuie să fie mai mare decât 0."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Gestionare contor: {meter_name}",
+        "description": "Ce doriți să faceți?",
+        "data": {
+          "action": "Acțiune"
+        }
+      },
+      "edit_config": {
+        "title": "Modifică configurația — {meter_name}",
+        "description": "Schimbați senzorul de contact sau parametrii de calcul.\n\nSenzor curent: `{current_entity}`",
+        "data": {
+          "source_entity": "Senzor de contact (ușă / geam)",
+          "meter_type": "Tipul contorului",
+          "multiplier": "Factor de multiplicare (impulsuri / m³)"
+        },
+        "data_description": {
+          "source_entity": "Selectați noul senzor magnetic (ex: dacă l-ați înlocuit)",
+          "multiplier": "Câte impulsuri = 1 m³ (scris pe contorul fizic)"
+        }
+      },
+      "adjust_index": {
+        "title": "Ajustare index — {meter_name}",
+        "description": "Folosiți această opțiune dacă senzorul a fost deconectat o perioadă și contorul s-a desincronizat față de cel fizic.\n\n**Citire curentă în HA:** {current_reading} m³\n\nIntroduceți valoarea reală de pe contorul fizic. Impulsurile înregistrate sunt **păstrate**, doar offset-ul se modifică.",
+        "data": {
+          "new_index": "Valoarea reală de pe contor (m³)"
+        }
+      },
+      "reset_counter": {
+        "title": "Reset complet — {meter_name}",
+        "description": "⚠️ Folosiți această opțiune **doar la schimbarea contorului fizic**.\n\nToate impulsurile înregistrate vor fi **șterse**. Introduceți indexul de start al noului contor (de obicei 0).\n\nSenzor curent: `{current_entity}`",
+        "data": {
+          "new_initial_value": "Index start al noului contor (m³)",
+          "confirm_reset": "Confirm că vreau să resetez contorul complet"
+        }
+      }
+    },
+    "error": {
+      "invalid_multiplier": "Factorul de multiplicare trebuie să fie mai mare decât 0.",
+      "invalid_value": "Valoarea introdusă nu este validă.",
+      "must_confirm": "Trebuie să bifați confirmarea pentru a reseta contorul."
+    }
+  }
+}

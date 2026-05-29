@@ -1,0 +1,44 @@
+reset_counter:
+  name: Resetează Contorul Complet
+  description: >
+    Șterge toate impulsurile și setează un nou index inițial.
+    Folosiți la schimbarea contorului fizic.
+  target:
+    entity:
+      integration: impulse_counter
+      domain: sensor
+  fields:
+    new_initial_value:
+      name: Index inițial nou (m³)
+      description: Valoarea de start a noului contor (implicit 0).
+      default: 0
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 9999999
+          step: 0.001
+          unit_of_measurement: "m³"
+          mode: box
+
+adjust_index:
+  name: Ajustează Indexul
+  description: >
+    Resincronizează citirea cu contorul fizic fără să piardă
+    istoricul de impulsuri. Folosiți când senzorul a fost deconectat.
+  target:
+    entity:
+      integration: impulse_counter
+      domain: sensor
+  fields:
+    new_index:
+      name: Valoarea reală de pe contor (m³)
+      description: Citirea actuală de pe contorul fizic.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 9999999
+          step: 0.001
+          unit_of_measurement: "m³"
+          mode: box
