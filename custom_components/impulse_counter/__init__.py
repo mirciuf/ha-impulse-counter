@@ -5,11 +5,11 @@ import logging
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, Event, callback
 from homeassistant.const import Platform
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN
+from .const import DOMAIN, EVENT_INDEX_ADJUSTED
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -76,7 +76,78 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }),
         )
 
+    # Listen for index adjustments and auto-calibrate any utility_meter
+    # helpers that use our sensor as their source. This prevents
+    # utility_meter from recording negative consumption for the period
+    # in which the index was corrected (e.g. after a dead/disconnected
+    # sensor was re-synced to a lower physical reading).
+    if not hass.data[DOMAIN].get("_calibrate_listener_registered"):
+        hass.data[DOMAIN]["_calibrate_listener_registered"] = True
+
+        @callback
+        def _handle_index_adjusted(event: Event) -> None:
+            hass.async_create_task(_calibrate_utility_meters(hass, event))
+
+        hass.bus.async_listen(EVENT_INDEX_ADJUSTED, _handle_index_adjusted)
+
     return True
+
+
+async def _calibrate_utility_meters(hass: HomeAssistant, event: Event) -> None:
+    """Find utility_meter entities sourced from our sensor and calibrate them."""
+    source_entity_id = event.data.get("entity_id")
+    new_value = event.data.get("new_value")
+    if not source_entity_id or new_value is None:
+        return
+
+    found_any = False
+
+    for um_entry in hass.config_entries.async_entries("utility_meter"):
+        um_config = {**um_entry.data, **um_entry.options}
+        if um_config.get("source") != source_entity_id:
+            continue
+
+        # The utility_meter helper creates one sensor per tariff/cycle.
+        # We need to find its actual entity_id(s) via the entity registry.
+        from homeassistant.helpers import entity_registry as er
+        ent_reg = er.async_get(hass)
+        entries = er.async_entries_for_config_entry(ent_reg, um_entry.entry_id)
+
+        for reg_entry in entries:
+            found_any = True
+            _LOGGER.info(
+                "Auto-calibrating utility_meter %s to %.3f (source %s was index-adjusted)",
+                reg_entry.entity_id, new_value, source_entity_id,
+            )
+            try:
+                await hass.services.async_call(
+                    "utility_meter",
+                    "calibrate",
+                    {
+                        "entity_id": reg_entry.entity_id,
+                        "value": new_value,
+                    },
+                    blocking=True,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Could not auto-calibrate utility_meter %s: %s",
+                    reg_entry.entity_id, err,
+                )
+
+    if found_any:
+        await hass.services.async_call(
+            "persistent_notification", "create",
+            {
+                "title": "✅ Contor recalibrat",
+                "message": (
+                    f"Senzorul `{source_entity_id}` a fost ajustat la {new_value} m³.\n\n"
+                    f"Toate utility meter-ele asociate au fost recalibrate automat — "
+                    f"nu va apărea consum negativ în Energy Dashboard."
+                ),
+                "notification_id": f"impulse_counter_calibrated_{source_entity_id.replace('.', '_')}",
+            },
+        )
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:

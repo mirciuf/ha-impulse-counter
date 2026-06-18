@@ -36,6 +36,7 @@ from .const import (
     ATTR_SOURCE_ENTITY,
     ATTR_METER_TYPE,
     ATTR_LAST_RESET,
+    EVENT_INDEX_ADJUSTED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
     """Representation of an Impulse Counter sensor."""
 
     _attr_has_entity_name = True
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_should_poll = False
 
     def __init__(
@@ -112,6 +113,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._total_pulses: int = 0
         self._last_source_state: str | None = None
         self._last_pulse_time: datetime | None = None
+        self._attr_last_reset: datetime | None = None
 
         meter_info = METER_TYPES.get(meter_type, METER_TYPES["water"])
         self._attr_name = name
@@ -152,7 +154,12 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
             ATTR_INITIAL_VALUE: self._initial_value,
             ATTR_SOURCE_ENTITY: self._source_entity,
             ATTR_METER_TYPE: self._meter_type,
-            ATTR_LAST_RESET: (
+            # NOTE: "last_reset" itself is the native HA property
+            # (self._attr_last_reset), automatically merged into the
+            # entity's attributes by the base SensorEntity class. We
+            # expose the last pulse timestamp separately to avoid
+            # colliding with / shadowing that native attribute.
+            "last_pulse_time": (
                 self._last_pulse_time.isoformat() if self._last_pulse_time else None
             ),
         }
@@ -172,9 +179,18 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
             try:
                 attrs = last_state.attributes
                 self._total_pulses = int(attrs.get(ATTR_TOTAL_PULSES, 0))
-                last_pulse_str = attrs.get(ATTR_LAST_RESET)
+                last_pulse_str = attrs.get("last_pulse_time")
                 if last_pulse_str:
                     self._last_pulse_time = datetime.fromisoformat(last_pulse_str)
+                # Restore the native last_reset property too, so HA's
+                # statistics engine doesn't see a fresh reset on every
+                # restart (which would otherwise zero out the running sum).
+                last_reset_native = last_state.attributes.get("last_reset")
+                if last_reset_native:
+                    try:
+                        self._attr_last_reset = datetime.fromisoformat(last_reset_native)
+                    except (ValueError, TypeError):
+                        pass
                 _LOGGER.debug(
                     "Restored %s: %s pulses → %.3f m³",
                     self._name, self._total_pulses, self.native_value,
@@ -249,7 +265,13 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         old_reading = self.native_value
         self._total_pulses = 0
         self._initial_value = new_initial_value
-        self._last_pulse_time = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        self._last_pulse_time = now
+        # Mark this as the new statistics zero-point. With state_class
+        # TOTAL, changing last_reset tells HA's recorder "don't compute
+        # a delta across this jump" — exactly what we want when the
+        # physical meter has been replaced.
+        self._attr_last_reset = now
         self._publish_pulses()
         if self._flow_sensor is not None:
             self._flow_sensor.clear_pulses()
@@ -272,10 +294,32 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
     def _do_adjust_index(self, new_index: float) -> None:
         old_reading = self.native_value
         self._initial_value = round(new_index - (self._total_pulses / self._multiplier), 3)
+
+        # CRITICAL FIX: mark this moment as a statistics reset point.
+        # Per HA documentation, for state_class TOTAL the recorder updates
+        # the running sum with (current_state - previous_state) UNLESS
+        # last_reset has changed, in which case nothing is added. This is
+        # the officially supported way to correct a meter's index — a
+        # correction that lowers the reading will no longer be recorded
+        # as negative consumption for that period.
+        self._attr_last_reset = datetime.now(timezone.utc)
+
         self.async_write_ha_state()
         _LOGGER.info(
-            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³",
+            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (last_reset updated, no negative consumption recorded)",
             self._name, old_reading, self.native_value,
+        )
+
+        # Fire event so __init__.py can calibrate any utility_meter
+        # helpers that use this sensor as their source (if configured
+        # as separate utility_meter helpers rather than added directly
+        # to the Energy dashboard).
+        self.hass.bus.async_fire(
+            EVENT_INDEX_ADJUSTED,
+            {
+                "entity_id": self.entity_id,
+                "new_value": self.native_value,
+            },
         )
 
     async def async_reset_counter(self, new_initial_value: float = 0.0) -> None:

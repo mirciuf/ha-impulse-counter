@@ -2,7 +2,7 @@
 
 DOMAIN = "impulse_counter"
 NAME = "Impulse Counter"
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 # Config keys
 CONF_SOURCE_ENTITY = "source_entity"
@@ -41,3 +41,7 @@ ATTR_INITIAL_VALUE = "initial_value"
 ATTR_SOURCE_ENTITY = "source_entity"
 ATTR_METER_TYPE = "meter_type"
 ATTR_LAST_RESET = "last_reset"
+
+# Event fired after adjust_index so __init__.py can calibrate
+# any utility_meter helpers that use this sensor as source.
+EVENT_INDEX_ADJUSTED = f"{DOMAIN}_index_adjusted"
