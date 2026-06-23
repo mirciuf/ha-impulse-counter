@@ -2,7 +2,7 @@
 
 DOMAIN = "impulse_counter"
 NAME = "Impulse Counter"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # Config keys
 CONF_SOURCE_ENTITY = "source_entity"

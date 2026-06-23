@@ -325,14 +325,33 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         old_reading = self.native_value
         self._initial_value = round(new_index - (self._total_pulses / self._multiplier), 3)
 
-        # CRITICAL FIX #1: mark this moment as a statistics reset point.
-        # Per HA documentation, for state_class TOTAL the recorder updates
-        # the running sum with (current_state - previous_state) UNLESS
-        # last_reset has changed, in which case nothing is added. This is
-        # the officially supported way to correct a meter's index — a
-        # correction that lowers the reading will no longer be recorded
-        # as negative consumption for that period.
-        self._attr_last_reset = datetime.now(timezone.utc)
+        # CRITICAL FIX #1: only mark this moment as a statistics reset
+        # point when the correction LOWERS the reading. Per HA docs, for
+        # state_class TOTAL the recorder adds (current_state -
+        # previous_state) to the running sum UNLESS last_reset has
+        # changed, in which case nothing is added.
+        #
+        # - new_index < old_reading (meter was over-counted, or we're
+        #   correcting drift downward): set last_reset so this jump is
+        #   NOT recorded as negative consumption.
+        # - new_index > old_reading (e.g. sensor was frozen for days
+        #   while battery was dead, and the real meter kept advancing):
+        #   do NOT touch last_reset, so the difference is recorded as
+        #   real consumption on the day of the adjustment — otherwise
+        #   that real water usage would silently vanish from the Energy
+        #   dashboard instead of just being attributed to today instead
+        #   of the days it actually happened on.
+        if new_index < old_reading:
+            self._attr_last_reset = datetime.now(timezone.utc)
+            _LOGGER.debug(
+                "%s: index lowered (%.3f → %.3f) — last_reset updated to avoid negative consumption",
+                self._name, old_reading, new_index,
+            )
+        else:
+            _LOGGER.debug(
+                "%s: index raised (%.3f → %.3f) — recorded as real consumption today",
+                self._name, old_reading, new_index,
+            )
 
         # CRITICAL FIX #2: persist the new initial_value to the config
         # entry. Without this, the adjustment only lives in memory and
@@ -342,7 +361,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
 
         self.async_write_ha_state()
         _LOGGER.info(
-            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (last_reset updated, initial_value persisted)",
+            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (initial_value persisted)",
             self._name, old_reading, self.native_value,
         )
 
