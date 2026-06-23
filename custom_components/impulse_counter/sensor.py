@@ -30,6 +30,7 @@ from homeassistant.components.recorder.models import (
     StatisticMetaData,
     StatisticMeanType,
 )
+from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import (
     DOMAIN,
@@ -427,6 +428,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
             source="recorder",
             statistic_id=statistic_id,
             unit_of_measurement=self._attr_native_unit_of_measurement,
+            unit_class=VolumeConverter.UNIT_CLASS,
         )
 
         stat_point: StatisticData = {
