@@ -1,7 +1,7 @@
 {
   "domain": "impulse_counter",
   "name": "Impulse Counter (Water & Gas)",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "documentation": "https://github.com/mirciuf/ha-impulse-counter",
   "issue_tracker": "https://github.com/mirciuf/ha-impulse-counter/issues",
   "dependencies": [],
