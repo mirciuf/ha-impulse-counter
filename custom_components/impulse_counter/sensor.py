@@ -251,6 +251,27 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._last_source_state = new_s
         self.async_write_ha_state()
 
+    def _persist_initial_value(self) -> None:
+        """Save the current _initial_value into the ConfigEntry's options.
+
+        CRITICAL: async_setup_entry reads initial_value from entry.data/
+        entry.options every time the integration is loaded (startup,
+        reload, restart). Without persisting here, adjust_index/reset
+        only change self._initial_value in memory — the next restart
+        reloads the OLD value from the entry, silently undoing the
+        correction and causing a large false delta (positive or
+        negative) in the Energy dashboard / utility_meter statistics.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            _LOGGER.warning(
+                "%s: Could not find config entry %s to persist initial_value",
+                self._name, self._entry_id,
+            )
+            return
+        new_options = {**entry.options, CONF_INITIAL_VALUE: self._initial_value}
+        self.hass.config_entries.async_update_entry(entry, options=new_options)
+
     # ------------------------------------------------------------------ #
     #  Reset
     # ------------------------------------------------------------------ #
@@ -275,9 +296,10 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._publish_pulses()
         if self._flow_sensor is not None:
             self._flow_sensor.clear_pulses()
+        self._persist_initial_value()
         self.async_write_ha_state()
         _LOGGER.info(
-            "%s: RESET — old reading %.3f m³ → new initial %.3f m³",
+            "%s: RESET — old reading %.3f m³ → new initial %.3f m³ (persisted to config entry)",
             self._name, old_reading, new_initial_value,
         )
 
@@ -295,7 +317,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         old_reading = self.native_value
         self._initial_value = round(new_index - (self._total_pulses / self._multiplier), 3)
 
-        # CRITICAL FIX: mark this moment as a statistics reset point.
+        # CRITICAL FIX #1: mark this moment as a statistics reset point.
         # Per HA documentation, for state_class TOTAL the recorder updates
         # the running sum with (current_state - previous_state) UNLESS
         # last_reset has changed, in which case nothing is added. This is
@@ -304,9 +326,15 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         # as negative consumption for that period.
         self._attr_last_reset = datetime.now(timezone.utc)
 
+        # CRITICAL FIX #2: persist the new initial_value to the config
+        # entry. Without this, the adjustment only lives in memory and
+        # is silently lost on the next restart/reload, causing a large
+        # false delta (the sensor "snaps back" toward the old value).
+        self._persist_initial_value()
+
         self.async_write_ha_state()
         _LOGGER.info(
-            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (last_reset updated, no negative consumption recorded)",
+            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (last_reset updated, initial_value persisted)",
             self._name, old_reading, self.native_value,
         )
 
