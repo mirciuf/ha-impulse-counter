@@ -112,7 +112,11 @@ class ImpulseCounterOptionsFlow(config_entries.OptionsFlow):
                 "reset_counter": "Reseteaza contorul complet (schimb contor)",
             }),
         })
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=schema,
+            description_placeholders={"meter_name": self.config_entry.title},
+        )
 
     async def async_step_edit_config(self, user_input=None):
         errors = {}
@@ -137,7 +141,12 @@ class ImpulseCounterOptionsFlow(config_entries.OptionsFlow):
                 vol.Coerce(float), vol.Range(min=0.001)
             ),
         })
-        return self.async_show_form(step_id="edit_config", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="edit_config",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"meter_name": self.config_entry.title},
+        )
 
     async def async_step_adjust_index(self, user_input=None):
         errors = {}
@@ -168,7 +177,10 @@ class ImpulseCounterOptionsFlow(config_entries.OptionsFlow):
             step_id="adjust_index",
             data_schema=schema,
             errors=errors,
-            description_placeholders={"current_reading": str(current_reading)},
+            description_placeholders={
+                "current_reading": str(current_reading),
+                "meter_name": self.config_entry.title,
+            },
         )
 
     async def async_step_reset_counter(self, user_input=None):
@@ -189,4 +201,9 @@ class ImpulseCounterOptionsFlow(config_entries.OptionsFlow):
             vol.Required("new_initial_value", default=0.0): vol.All(vol.Coerce(float), vol.Range(min=0)),
             vol.Required("confirm_reset", default=False): bool,
         })
-        return self.async_show_form(step_id="reset_counter", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="reset_counter",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"meter_name": self.config_entry.title},
+        )

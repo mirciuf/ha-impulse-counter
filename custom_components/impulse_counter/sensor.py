@@ -25,7 +25,11 @@ from homeassistant.components.recorder.statistics import (
     async_import_statistics,
     get_last_statistics,
 )
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMetaData,
+    StatisticMeanType,
+)
 
 from .const import (
     DOMAIN,
@@ -417,6 +421,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
 
         metadata = StatisticMetaData(
             has_mean=False,
+            mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=self._attr_name,
             source="recorder",
