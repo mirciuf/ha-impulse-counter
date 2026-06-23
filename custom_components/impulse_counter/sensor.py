@@ -304,8 +304,11 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._publish_pulses()
         if self._flow_sensor is not None:
             self._flow_sensor.clear_pulses()
-        self._persist_initial_value()
+        # ORDER MATTERS: write state (with new last_reset) BEFORE
+        # touching the config entry — see _do_adjust_index for details
+        # on why persisting first can cause a race that loses last_reset.
         self.async_write_ha_state()
+        self._persist_initial_value()
         _LOGGER.info(
             "%s: RESET — old reading %.3f m³ → new initial %.3f m³ (persisted to config entry)",
             self._name, old_reading, new_initial_value,
@@ -353,13 +356,24 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
                 self._name, old_reading, new_index,
             )
 
-        # CRITICAL FIX #2: persist the new initial_value to the config
-        # entry. Without this, the adjustment only lives in memory and
-        # is silently lost on the next restart/reload, causing a large
-        # false delta (the sensor "snaps back" toward the old value).
+        # CRITICAL FIX #2 (ORDER MATTERS): publish the new state — with
+        # the correct last_reset already set — BEFORE touching the
+        # config entry. _persist_initial_value() below calls
+        # async_update_entry(), which synchronously notifies update
+        # listeners; if that happens first, the recorder can end up
+        # processing this entity's state_changed event in a different
+        # order than expected, observing the OLD last_reset and
+        # recording the full new value as consumption instead of
+        # skipping it. Writing state first guarantees the recorder sees
+        # the new last_reset attached to the new state from the start.
+        self.async_write_ha_state()
+
+        # Persist the new initial_value to the config entry. Without
+        # this, the adjustment only lives in memory and is silently
+        # lost on the next restart/reload, causing a large false delta
+        # (the sensor "snaps back" toward the old value).
         self._persist_initial_value()
 
-        self.async_write_ha_state()
         _LOGGER.info(
             "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (initial_value persisted)",
             self._name, old_reading, self.native_value,
