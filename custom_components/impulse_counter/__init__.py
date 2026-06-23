@@ -151,7 +151,24 @@ async def _calibrate_utility_meters(hass: HomeAssistant, event: Event) -> None:
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update options."""
+    """Update options.
+
+    Skip the reload when this update was triggered internally by
+    _persist_initial_value() (adjust_index/reset). Reloading the
+    integration at that moment destroys and recreates the entity
+    BEFORE the just-updated state (with the new last_reset) has been
+    written/processed by the recorder, causing last_reset to be lost
+    on restore and the adjustment to be recorded as a large false
+    delta in statistics. Reload is still needed for real config
+    changes made via the "edit_config"/"edit_params" options steps,
+    so we only skip it when the sensor itself flagged this specific
+    update as internal (via hass.data, never via entry.options, to
+    avoid recursively triggering this same listener again).
+    """
+    skip_key = f"_skip_reload_{entry.entry_id}"
+    if hass.data.get(DOMAIN, {}).pop(skip_key, False):
+        _LOGGER.debug("Skipping reload for internal initial_value persistence on %s", entry.entry_id)
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 

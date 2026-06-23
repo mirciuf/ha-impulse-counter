@@ -261,6 +261,13 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         reloads the OLD value from the entry, silently undoing the
         correction and causing a large false delta (positive or
         negative) in the Energy dashboard / utility_meter statistics.
+
+        We flag this update as internal via hass.data so __init__.py's
+        async_update_options skips the automatic reload it would
+        otherwise trigger — reloading right now, before this entity's
+        freshly-set last_reset has been written out, would destroy and
+        recreate the entity and restore the OLD last_reset, defeating
+        the whole point of marking this moment as a reset point.
         """
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         if entry is None:
@@ -269,6 +276,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
                 self._name, self._entry_id,
             )
             return
+        self.hass.data.setdefault(DOMAIN, {})[f"_skip_reload_{self._entry_id}"] = True
         new_options = {**entry.options, CONF_INITIAL_VALUE: self._initial_value}
         self.hass.config_entries.async_update_entry(entry, options=new_options)
 
