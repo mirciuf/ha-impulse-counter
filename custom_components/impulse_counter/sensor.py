@@ -113,7 +113,9 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._total_pulses: int = 0
         self._last_source_state: str | None = None
         self._last_pulse_time: datetime | None = None
-        self._attr_last_reset: datetime | None = None
+        # NOTE: no self._attr_last_reset here. HA raises a ValueError at
+        # entity-add time if last_reset is set on a state_class other
+        # than TOTAL — see _do_reset and async_added_to_hass below.
 
         meter_info = METER_TYPES.get(meter_type, METER_TYPES["water"])
         self._attr_name = name
@@ -182,15 +184,13 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
                 last_pulse_str = attrs.get("last_pulse_time")
                 if last_pulse_str:
                     self._last_pulse_time = datetime.fromisoformat(last_pulse_str)
-                # Restore the native last_reset property too, so HA's
-                # statistics engine doesn't see a fresh reset on every
-                # restart (which would otherwise zero out the running sum).
-                last_reset_native = last_state.attributes.get("last_reset")
-                if last_reset_native:
-                    try:
-                        self._attr_last_reset = datetime.fromisoformat(last_reset_native)
-                    except (ValueError, TypeError):
-                        pass
+                # NOTE: we deliberately do NOT restore last_reset here.
+                # state_class is TOTAL_INCREASING as of v1.8.0, and HA
+                # raises a ValueError at entity-add time if last_reset is
+                # set on any state_class other than TOTAL. A leftover
+                # last_reset attribute from a pre-v1.8.0 state (when
+                # state_class was TOTAL) would otherwise crash entity
+                # setup on the first restart after upgrading.
                 _LOGGER.debug(
                     "Restored %s: %s pulses → %.3f m³",
                     self._name, self._total_pulses, self.native_value,
@@ -296,10 +296,14 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._initial_value = new_initial_value
         now = datetime.now(timezone.utc)
         self._last_pulse_time = now
-        # A full meter reset/replacement should never count as
-        # consumption. Setting last_reset tells the recorder not to
-        # compute a delta across this jump.
-        self._attr_last_reset = now
+        # NOTE: no last_reset here. As of v1.8.0, state_class is
+        # TOTAL_INCREASING, and HA raises a ValueError if last_reset is
+        # set on this state_class. We don't need it anyway: a full
+        # meter reset/replacement drops the state by virtually 100%,
+        # which is far above the 10% threshold HA's recorder already
+        # uses to recognize "this is a new meter cycle, not negative
+        # consumption" for TOTAL_INCREASING sensors. No manual signal
+        # required.
         self._publish_pulses()
         if self._flow_sensor is not None:
             self._flow_sensor.clear_pulses()
@@ -307,7 +311,8 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._persist_initial_value()
 
         _LOGGER.info(
-            "%s: RESET — old reading %.3f m³ → new initial %.3f m³ (last_reset set, persisted)",
+            "%s: RESET — old reading %.3f m³ → new initial %.3f m³ (persisted; "
+            "new cycle detected natively by recorder via TOTAL_INCREASING)",
             self._name, old_reading, new_initial_value,
         )
 
