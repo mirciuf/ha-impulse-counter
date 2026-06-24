@@ -20,18 +20,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.const import STATE_ON, STATE_OPEN
 
-from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import (
-    async_import_statistics,
-    get_last_statistics,
-)
-from homeassistant.components.recorder.models import (
-    StatisticData,
-    StatisticMetaData,
-    StatisticMeanType,
-)
-from homeassistant.util.unit_conversion import VolumeConverter
-
 from .const import (
     DOMAIN,
     CONF_SOURCE_ENTITY,
@@ -308,19 +296,18 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         self._initial_value = new_initial_value
         now = datetime.now(timezone.utc)
         self._last_pulse_time = now
+        # A full meter reset/replacement should never count as
+        # consumption. Setting last_reset tells the recorder not to
+        # compute a delta across this jump.
+        self._attr_last_reset = now
         self._publish_pulses()
         if self._flow_sensor is not None:
             self._flow_sensor.clear_pulses()
         self.async_write_ha_state()
         self._persist_initial_value()
 
-        # A full meter reset/replacement should never count as
-        # consumption, regardless of direction — write the statistics
-        # sum unchanged (delta = 0) directly via the recorder API.
-        self.hass.async_create_task(self._async_correct_statistics(0.0))
-
         _LOGGER.info(
-            "%s: RESET — old reading %.3f m³ → new initial %.3f m³ (persisted, statistics unaffected)",
+            "%s: RESET — old reading %.3f m³ → new initial %.3f m³ (last_reset set, persisted)",
             self._name, old_reading, new_initial_value,
         )
 
@@ -336,8 +323,39 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
 
     def _do_adjust_index(self, new_index: float) -> None:
         old_reading = self.native_value
-        delta = round(new_index - old_reading, 3)
         self._initial_value = round(new_index - (self._total_pulses / self._multiplier), 3)
+
+        # CONDITIONAL last_reset:
+        # - new_index < old_reading (downward correction, rare in
+        #   practice — typically an operator mistake): set last_reset
+        #   so the recorder does not record negative consumption.
+        # - new_index > old_reading (the common real-world case — the
+        #   sensor was frozen for days while the physical meter kept
+        #   advancing): do NOT touch last_reset, so the real
+        #   difference is recorded as normal consumption on the day of
+        #   the adjustment.
+        #
+        # NOTE: an earlier attempt at this same logic (v1.5.0/v1.5.1)
+        # appeared unreliable in one test, and a follow-up attempt to
+        # write statistics directly via async_import_statistics
+        # (v1.6.x) caused confirmed SQL integrity errors (UNIQUE
+        # constraint failed on statistics.metadata_id/start_ts) when
+        # colliding with the recorder's own compilation of the current
+        # hour. This version returns to the simpler last_reset-only
+        # approach — no direct database writes — which carries no risk
+        # of corrupting the statistics table, even if the suppression
+        # of negative consumption is occasionally imperfect.
+        if new_index < old_reading:
+            self._attr_last_reset = datetime.now(timezone.utc)
+            _LOGGER.debug(
+                "%s: index lowered (%.3f → %.3f) — last_reset set",
+                self._name, old_reading, new_index,
+            )
+        else:
+            _LOGGER.debug(
+                "%s: index raised (%.3f → %.3f) — recorded as normal consumption",
+                self._name, old_reading, new_index,
+            )
 
         # Publish the new state immediately so the UI/automations see the
         # corrected reading right away.
@@ -349,24 +367,9 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         # (the sensor "snaps back" toward the old value).
         self._persist_initial_value()
 
-        # CRITICAL FIX: correct the long-term statistics DIRECTLY via
-        # the recorder's official statistics API, instead of relying on
-        # last_reset. In practice, last_reset did not reliably suppress
-        # the jump when this entity's state_changed event was processed
-        # (observed: the recorder still added the full new value as
-        # consumption for that hour, regardless of last_reset). Writing
-        # the correct sum directly removes that ambiguity entirely:
-        #   - new_index < old_reading (downward correction): write sum
-        #     unchanged (delta = 0) for this point — no false negative
-        #     consumption.
-        #   - new_index > old_reading (sensor was frozen, real usage
-        #     happened in the background): write sum + delta — the real
-        #     consumption is recorded on the day of the adjustment.
-        self.hass.async_create_task(self._async_correct_statistics(delta))
-
         _LOGGER.info(
-            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (delta %.3f, statistics corrected directly)",
-            self._name, old_reading, self.native_value, delta,
+            "%s: INDEX ADJUSTED — %.3f m³ → %.3f m³ (initial_value persisted)",
+            self._name, old_reading, self.native_value,
         )
 
         # Fire event so __init__.py can calibrate any utility_meter
@@ -380,71 +383,6 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
                 "new_value": self.native_value,
             },
         )
-
-    async def _async_correct_statistics(self, delta: float) -> None:
-        """Write a corrected statistics point directly to the recorder.
-
-        This bypasses last_reset entirely (which was found to not
-        reliably suppress the jump when the entity's state_changed
-        event is processed by the recorder). Instead we read the last
-        known sum for this entity and write a new hourly statistics
-        point with sum = last_sum + effective_delta, where
-        effective_delta is 0 for a downward index correction (no false
-        negative consumption) or the real difference for an upward
-        correction (real consumption recorded on the day of the
-        adjustment).
-        """
-        statistic_id = self.entity_id
-        if not statistic_id:
-            _LOGGER.warning("%s: entity_id not yet assigned, cannot correct statistics", self._name)
-            return
-
-        recorder_instance = get_instance(self.hass)
-
-        try:
-            last_stats = await recorder_instance.async_add_executor_job(
-                get_last_statistics, self.hass, 1, statistic_id, True, {"sum", "state"}
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("%s: could not read last statistics: %s", self._name, err)
-            return
-
-        last_sum = 0.0
-        if statistic_id in last_stats and last_stats[statistic_id]:
-            last_sum = last_stats[statistic_id][0].get("sum") or 0.0
-
-        # Effective delta to apply: 0 if the index was lowered (avoid
-        # negative consumption), otherwise the real positive difference.
-        effective_delta = max(delta, 0.0)
-        new_sum = round(last_sum + effective_delta, 3)
-
-        now_hour_start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-
-        metadata = StatisticMetaData(
-            has_mean=False,
-            mean_type=StatisticMeanType.NONE,
-            has_sum=True,
-            name=self._attr_name,
-            source="recorder",
-            statistic_id=statistic_id,
-            unit_of_measurement=self._attr_native_unit_of_measurement,
-            unit_class=VolumeConverter.UNIT_CLASS,
-        )
-
-        stat_point: StatisticData = {
-            "start": now_hour_start,
-            "state": self.native_value,
-            "sum": new_sum,
-        }
-
-        try:
-            async_import_statistics(self.hass, metadata, [stat_point])
-            _LOGGER.info(
-                "%s: statistics corrected — sum %.3f → %.3f (delta applied: %.3f)",
-                self._name, last_sum, new_sum, effective_delta,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("%s: could not write corrected statistics: %s", self._name, err)
 
     async def async_reset_counter(self, new_initial_value: float = 0.0) -> None:
         self._do_reset(new_initial_value)
