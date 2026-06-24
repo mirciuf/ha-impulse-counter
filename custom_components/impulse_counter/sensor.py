@@ -86,7 +86,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
     """Representation of an Impulse Counter sensor."""
 
     _attr_has_entity_name = True
-    _attr_state_class = SensorStateClass.TOTAL
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_should_poll = False
 
     def __init__(
@@ -325,37 +325,47 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
         old_reading = self.native_value
         self._initial_value = round(new_index - (self._total_pulses / self._multiplier), 3)
 
-        # CONDITIONAL last_reset:
-        # - new_index < old_reading (downward correction, rare in
-        #   practice — typically an operator mistake): set last_reset
-        #   so the recorder does not record negative consumption.
-        # - new_index > old_reading (the common real-world case — the
-        #   sensor was frozen for days while the physical meter kept
-        #   advancing): do NOT touch last_reset, so the real
-        #   difference is recorded as normal consumption on the day of
-        #   the adjustment.
+        # NO last_reset here, on purpose.
         #
-        # NOTE: an earlier attempt at this same logic (v1.5.0/v1.5.1)
-        # appeared unreliable in one test, and a follow-up attempt to
-        # write statistics directly via async_import_statistics
-        # (v1.6.x) caused confirmed SQL integrity errors (UNIQUE
-        # constraint failed on statistics.metadata_id/start_ts) when
-        # colliding with the recorder's own compilation of the current
-        # hour. This version returns to the simpler last_reset-only
-        # approach — no direct database writes — which carries no risk
-        # of corrupting the statistics table, even if the suppression
-        # of negative consumption is occasionally imperfect.
-        if new_index < old_reading:
-            self._attr_last_reset = datetime.now(timezone.utc)
-            _LOGGER.debug(
-                "%s: index lowered (%.3f → %.3f) — last_reset set",
-                self._name, old_reading, new_index,
-            )
-        else:
-            _LOGGER.debug(
-                "%s: index raised (%.3f → %.3f) — recorded as normal consumption",
-                self._name, old_reading, new_index,
-            )
+        # History of this decision: earlier versions (v1.5.0–v1.7.1) set
+        # last_reset whenever new_index < old_reading, to stop the
+        # recorder from recording a negative delta. That worked, but it
+        # had a side effect: the recorder treats a last_reset change as
+        # "a brand-new meter cycle started here", so the *entire* current
+        # state gets counted as consumption in the hour of the
+        # adjustment — a large, isolated, false *positive* spike (e.g. a
+        # 58.5 m³ "consumption" appearing in a single hour). It traded a
+        # small false-negative for a large false-positive instead of
+        # actually fixing anything.
+        #
+        # A water/gas meter physically cannot have negative consumption,
+        # so a downward index correction is by definition an operator
+        # error, never real usage. The correct fix is for the recorder
+        # to record exactly zero consumption for that correction — not a
+        # large negative number, and not a large positive one either.
+        #
+        # That behavior already exists natively in HA for
+        # SensorStateClass.TOTAL_INCREASING: "the logic when updating the
+        # statistics is to update the sum column with the difference
+        # between the current state and the previous state unless the
+        # difference is negative, in which case don't add anything."
+        # (developers.home-assistant.io/docs/core/entity/sensor)
+        # That is exactly the semantics we want, with no custom code and
+        # no last_reset side effect. A large *upward* jump (>10% — e.g. a
+        # physical meter replacement) is still correctly treated by HA as
+        # a new meter cycle, which is what _do_reset is for anyway.
+        #
+        # (v1.6.x's attempt to write statistics sums directly via
+        # async_import_statistics caused confirmed SQL integrity errors —
+        # UNIQUE constraint failed on statistics.metadata_id/start_ts —
+        # when colliding with the recorder's own compilation of the
+        # current hour. That approach was abandoned. This version makes
+        # no direct database writes at all.)
+        _LOGGER.debug(
+            "%s: index adjusted (%.3f → %.3f) — state_class TOTAL_INCREASING "
+            "handles the delta natively (negative deltas are not counted)",
+            self._name, old_reading, new_index,
+        )
 
         # Publish the new state immediately so the UI/automations see the
         # corrected reading right away.
