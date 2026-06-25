@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import math
-from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,8 +40,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Fereastra de timp pentru calculul debitului (secunde)
-FLOW_WINDOW_SECONDS = 60
+# Daca nu vine niciun puls nou timp de atatea secunde, consideram
+# debitul instant 0 (robinetul s-a inchis). Nu afecteaza precizia
+# calculului in sine — doar decide cand revenim explicit la 0.
+FLOW_IDLE_TIMEOUT_SECONDS = 15
 
 
 async def async_setup_entry(
@@ -411,7 +412,7 @@ class ImpulseCounterSensor(RestoreEntity, SensorEntity):
 # ═══════════════════════════════════════════════════════════════════
 
 class ImpulseCounterFlowSensor(SensorEntity):
-    """Flow rate sensor derived from pulse timestamps."""
+    """Flow rate sensor derived from the exact time between the last two pulses."""
 
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -432,8 +433,9 @@ class ImpulseCounterFlowSensor(SensorEntity):
         self._multiplier = multiplier
         self._meter_sensor = meter_sensor
 
-        # Coada cu timestamp-urile impulsurilor din ultimele 60 secunde
-        self._pulse_times: deque = deque()
+        # Doar ultimul puls contează — nu mai există istoric de fereastră.
+        self._last_pulse_time: datetime | None = None
+        self._current_flow: float = 0.0
 
         self._attr_unique_id = f"{DOMAIN}_{entry_id}_flow"
 
@@ -454,62 +456,70 @@ class ImpulseCounterFlowSensor(SensorEntity):
 
     @callback
     def register_pulse(self, pulse_time: datetime) -> None:
-        """Called by main sensor on every pulse."""
-        self._pulse_times.append(pulse_time)
-        self._cleanup_old_pulses(pulse_time)
+        """Called by main sensor on every pulse.
+
+        Flow is computed from Δt between this pulse and the previous one —
+        not from a count of pulses in a trailing window. This means the
+        displayed flow updates immediately on every single pulse, with no
+        extra lag from waiting for a window to "see" the new rate. The
+        trade-off, inherent to this approach and not a bug: with exactly
+        one pulse, there is no previous Δt to compare against, so the
+        very first pulse after idle cannot produce a flow value yet — it
+        becomes available starting from the second pulse onward.
+        """
+        if self._last_pulse_time is not None:
+            delta_seconds = (pulse_time - self._last_pulse_time).total_seconds()
+            if delta_seconds > 0:
+                self._current_flow = self._flow_from_delta(delta_seconds)
+        self._last_pulse_time = pulse_time
         self.async_write_ha_state()
 
     @callback
     def clear_pulses(self) -> None:
         """Clear pulse history on reset."""
-        self._pulse_times.clear()
+        self._last_pulse_time = None
+        self._current_flow = 0.0
         self.async_write_ha_state()
 
-    def _cleanup_old_pulses(self, now: datetime) -> None:
-        """Remove pulses older than FLOW_WINDOW_SECONDS."""
-        cutoff = now.timestamp() - FLOW_WINDOW_SECONDS
-        while self._pulse_times and self._pulse_times[0].timestamp() < cutoff:
-            self._pulse_times.popleft()
+    def _flow_from_delta(self, delta_seconds: float) -> float:
+        """Convert the time between two consecutive pulses into a flow rate."""
+        m3_per_pulse = 1.0 / self._multiplier
+
+        if self._meter_type == METER_TYPE_WATER:
+            # L/min: (m³ pe puls × 1000 L/m³) / secunde × 60 s/min
+            flow = (m3_per_pulse * 1000.0 / delta_seconds) * 60.0
+            return round(flow, 1)
+        else:
+            # m³/h: (m³ pe puls) / secunde × 3600 s/h
+            flow = (m3_per_pulse / delta_seconds) * 3600.0
+            return round(flow, 3)
 
     @property
     def native_value(self) -> float:
-        """Calculate flow rate from pulses in the last 60 seconds."""
-        now = datetime.now(timezone.utc)
-        self._cleanup_old_pulses(now)
-
-        pulses_in_window = len(self._pulse_times)
-
-        if pulses_in_window == 0:
-            return 0.0
-
-        # m³ consumati in fereastra de 60 secunde
-        m3_in_window = pulses_in_window / self._multiplier
-
-        if self._meter_type == METER_TYPE_WATER:
-            # Convertim in L/min: m³ = 1000L, fereastra = 60s = 1 min
-            flow = m3_in_window * 1000.0
-            return round(flow, 1)
-        else:
-            # Gaz: m³/h — extrapolam fereastra de 60s la 1 ora
-            flow = m3_in_window * 60.0
-            return round(flow, 3)
+        """Return the most recently computed instantaneous flow rate."""
+        return self._current_flow
 
     async def async_added_to_hass(self) -> None:
         """Start periodic timer to reset flow to 0 when no pulses arrive."""
         await super().async_added_to_hass()
 
-        async def _check_flow(_now=None):
-            """Curata impulsurile vechi si forteaza update la 0 daca e cazul."""
-            old_count = len(self._pulse_times)
-            self._cleanup_old_pulses(datetime.now(timezone.utc))
-            new_count = len(self._pulse_times)
-            if new_count != old_count or new_count == 0:
+        async def _check_idle(_now=None):
+            """If no pulse has arrived for FLOW_IDLE_TIMEOUT_SECONDS, the tap
+            is presumably closed — force flow back to 0 rather than leaving
+            the last computed Δt-based value displayed forever."""
+            if self._last_pulse_time is None or self._current_flow == 0.0:
+                return
+            idle_seconds = (
+                datetime.now(timezone.utc) - self._last_pulse_time
+            ).total_seconds()
+            if idle_seconds >= FLOW_IDLE_TIMEOUT_SECONDS:
+                self._current_flow = 0.0
                 self.async_write_ha_state()
 
         self.async_on_remove(
             async_track_time_interval(
                 self.hass,
-                _check_flow,
-                timedelta(seconds=15),
+                _check_idle,
+                timedelta(seconds=5),
             )
         )
